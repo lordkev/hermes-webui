@@ -15,7 +15,7 @@ Contract:
   ``{"type": "stale_client_bundle", ...}`` BEFORE touching any session state,
   mirroring the existing stale-agent-runtime barrier;
 * a missing header is accepted (curl, tests, older clients that predate the header);
-* the client reloads once on that response, preserving the typed message.
+* the client restores the typed message + attachments and asks for a manual refresh (no auto-reload).
 """
 from __future__ import annotations
 
@@ -179,18 +179,19 @@ def test_api_helper_sends_bundle_header():
     assert "__HERMES_WEBUI_BUNDLE_VERSION__" in body
 
 
-def test_client_reloads_once_on_stale_bundle():
-    """The /api/chat/start error path recognises the typed response, keeps the
-    draft, and reloads — guarded so a persistent mismatch cannot loop."""
+def test_client_restores_draft_and_asks_for_refresh_on_stale_bundle():
+    """The /api/chat/start error path recognises the typed response, puts the
+    user's draft back through the shared failed-send recovery, and asks for a
+    manual refresh. It must NOT reload the page itself: a reload from inside a
+    half-finished send races the draft clear/save, queued follow-ups, newer
+    typing and staged File objects (#8156 review)."""
     anchor = "_isStaleClientBundleError(e)){"
     assert anchor in MESSAGES_JS, "chat-start catch must branch on the typed stale-bundle error"
     i = MESSAGES_JS.index(anchor)
-    window = MESSAGES_JS[i:i + 3600]
-    assert "location.reload(" in window
-    # loop guard: a marker in sessionStorage so a second consecutive stale
-    # response does not reload again
-    assert "sessionStorage" in window
-    assert "hermes-webui-stale-bundle-reload" in window
+    window = MESSAGES_JS[i:i + 2600]
+    window = window[:window.index("if(e&&e.status===404)")]  # this branch only
+    assert "location.reload(" not in window
+    assert "sessionStorage" not in window
     # Remove only this send's turn — optimisticMessages is a copy of the whole
     # transcript, filtering it out would blank the conversation.
     assert "S.messages.filter(m=>m!==userMsg)" in window
@@ -198,9 +199,20 @@ def test_client_reloads_once_on_stale_bundle():
     # Reuse the shared failed-send recovery (text + files + owning session +
     # ordering after the send-time clear) instead of a hand-rolled restore.
     assert "_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise)" in window
-    # No reload while unsaved File objects are staged, and none unless the
-    # loop-guard marker was actually stored.
-    assert "_hasStagedFiles" in window
-    assert "_markerSaved" in window
-    # The reload is chained after the draft persistence, never on a bare timer.
-    assert "setTimeout(()=>{ try{ window.location.reload()" not in window
+    # The rejected turn's pollers and cards are torn down like any other
+    # pre-start rejection.
+    assert "stopClarifyPollingForSession(activeSid)" in window
+    assert "hideClarifyCard(true, 'terminal')" in window
+    assert "hideApprovalCard(true)" in window
+    # The user is told what to do.
+    assert "t('stale_bundle_refresh')" in window
+    assert "sessionStorage.removeItem('hermes-webui-stale-bundle-reload')" not in MESSAGES_JS
+
+
+def test_stale_bundle_message_exists_in_every_locale():
+    i18n = (REPO_ROOT / "static" / "i18n.js").read_text(encoding="utf-8")
+    locale_blocks = i18n.count("regen_failed:")
+    assert locale_blocks >= 15
+    assert i18n.count("stale_bundle_refresh:") == locale_blocks
+    assert "stale_bundle_reloading" not in i18n
+    assert "stale_bundle_reload_failed" not in i18n

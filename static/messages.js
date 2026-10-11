@@ -1857,24 +1857,25 @@ async function send(){
     })});
     _pendingMoaConfig=null;
     postStartData = startData;
-    // #8155: a successful start proves this bundle matches the server; allow a
-    // future stale-bundle 409 (after the next upgrade) to reload once again.
-    try{ sessionStorage.removeItem('hermes-webui-stale-bundle-reload'); }catch(_){ }
   }catch(e){
     const errMsg=String((e&&e.message)||'');
     // #8155: this page runs a bundle from an older WebUI build than the server
     // (a native shell or long-lived tab that never re-navigated after an
     // upgrade). The server refused the turn with a typed 409 before touching
-    // session state. Keep the typed message as the draft and reload ONCE so the
-    // fresh bundle loads; a sessionStorage marker stops a persistent mismatch
-    // (e.g. a proxy serving a cached index.html) from reloading forever.
+    // session state. Restore the draft and ask the user to refresh.
     if(e&&e.status===409&&_isStaleClientBundleError(e)){
-      const _marker='hermes-webui-stale-bundle-reload';
-      let _already=false;
-      try{ _already=sessionStorage.getItem(_marker)==='1'; }catch(_){ }
+      // Do NOT auto-reload: a reload from inside a half-finished send races the
+      // draft clear/save, a follow-up queued for this session, newer typing and
+      // staged File objects (review of #8156). Treat it like every other
+      // pre-start rejection — restore what the user had — and tell them to
+      // refresh. The server rejected the turn before touching session state,
+      // so nothing was lost on that side.
       delete INFLIGHT[activeSid];
       if(typeof clearInflightState==='function') clearInflightState(activeSid);
       if(typeof clearOptimisticSessionStreaming==='function') clearOptimisticSessionStreaming(activeSid);
+      if(!_approvalSessionId || _approvalSessionId===activeSid) hideApprovalCard(true);
+      if(!_clarifySessionId || _clarifySessionId===activeSid) hideClarifyCard(true, 'terminal');
+      if(typeof stopClarifyPollingForSession==='function') stopClarifyPollingForSession(activeSid);
       removeThinking();
       // Remove ONLY this send's optimistic turn (optimisticMessages is a copy of
       // the whole transcript, so filtering it out would blank the conversation),
@@ -1884,37 +1885,14 @@ async function send(){
         if(typeof renderMessages==='function') renderMessages();
       }
       setBusy(false);
-      // Same recovery as every other pre-start rejection (#5472): put the
-      // ORIGINAL draft + attachments back into the owning session's composer and
-      // persist the text server-side, ordered after the send-time draft clear.
+      // Same recovery as every other pre-start rejection (#5472): the ORIGINAL
+      // draft + attachments go back to the owning session's composer (without
+      // clobbering newer typing) and the text is persisted server-side, ordered
+      // after the send-time draft clear.
       _restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise);
-      const _hasStagedFiles=Array.isArray(_failedSendFilesSnapshot)&&_failedSendFilesSnapshot.length>0;
-      let _markerSaved=false;
-      if(!_already&&!_hasStagedFiles){
-        try{ sessionStorage.setItem(_marker,'1'); _markerSaved=sessionStorage.getItem(_marker)==='1'; }catch(_){ _markerSaved=false; }
-      }
-      if(_markerSaved){
-        // Reload only once the restored draft is durably on the server: wait
-        // for the send-time clear, then an explicit save of the restored text,
-        // so navigation cannot cancel the write or let the clear land last.
-        showToast(t('stale_bundle_reloading'),2000);
-        const _persistThenReload=()=>{
-          const _p=(typeof _saveComposerDraftNow==='function')
-            ? _saveComposerDraftNow(activeSid, _failedSendDraftText, null)
-            : Promise.resolve();
-          Promise.resolve(_p).then(()=>{ try{ window.location.reload(); }catch(_){ } },()=>{ try{ window.location.reload(); }catch(_){ } });
-        };
-        const _clear=_composerDraftClearPromise;
-        if(_clear&&typeof _clear.then==='function') _clear.then(_persistThenReload,_persistThenReload);
-        else _persistThenReload();
-      }else{
-        // Already reloaded once (persistent mismatch, e.g. a proxy serving a
-        // cached index.html), unsaved File objects are staged (a reload would
-        // lose them), or the loop guard could not be stored: keep the page and
-        // ask for a manual refresh instead of looping.
-        showToast(t('stale_bundle_reload_failed'),8000);
-        setComposerStatus(t('stale_bundle_reload_failed'));
-      }
+      showToast(t('stale_bundle_refresh'),8000);
+      setComposerStatus(t('stale_bundle_refresh'));
+      if(typeof renderSessionList==='function') void renderSessionList();
       return;
     }
     // If /api/chat/start returns 404, the session was deleted server-side
