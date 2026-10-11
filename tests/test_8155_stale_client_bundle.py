@@ -23,13 +23,13 @@ import io
 import json
 import re
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MESSAGES_JS = (REPO_ROOT / "static" / "messages.js").read_text(encoding="utf-8")
 WORKSPACE_JS = (REPO_ROOT / "static" / "workspace.js").read_text(encoding="utf-8")
+STALE_HEADER = "X-Hermes-WebUI-Bundle"
 
 
 # ── server ────────────────────────────────────────────────────────────────────
@@ -97,16 +97,43 @@ def test_missing_header_passes(routes, monkeypatch):
     assert routes._stale_client_bundle_response(h) is None
 
 
-def test_missing_header_from_a_browser_page_is_stale(routes, monkeypatch):
-    """The client #8155 was filed about: a page running a bundle that predates
-    the header. Browser fetch() always sends Origin (or Referer) to a same-origin
-    API, so a page with no bundle header is a pre-header bundle, i.e. stale."""
+def test_missing_header_is_never_rejected_even_from_a_page(routes, monkeypatch):
+    """Clients that do not send the header at all — WebUI Bridge API clients,
+    older native shells, any browser page that predates the stamp — must keep
+    working. Origin/Referer are not a substitute for the version header."""
     monkeypatch.setattr(routes, "WEBUI_VERSION", "exp-v9.9.9", raising=False)
-    for hdrs in ({"Origin": "https://host.example"}, {"Referer": "https://host.example/session/abc"}):
-        payload = routes._stale_client_bundle_response(_Handler(hdrs))
-        assert payload is not None, hdrs
-        assert payload["type"] == "stale_client_bundle"
-        assert payload["server_version"] == "exp-v9.9.9"
+    for hdrs in (
+        {"Origin": "https://host.example"},
+        {"Referer": "https://host.example/session/abc"},
+        {"Origin": "https://host.example", STALE_HEADER: ""},
+        {STALE_HEADER: "   "},
+    ):
+        assert routes._stale_client_bundle_response(_Handler(hdrs)) is None, hdrs
+
+
+def test_non_string_header_object_is_ignored(routes, monkeypatch):
+    """Test doubles hand the barrier a Mock() handler whose headers.get()
+    returns a Mock; that must read as 'no header', not leak into a JSON body."""
+    from unittest.mock import Mock
+    monkeypatch.setattr(routes, "WEBUI_VERSION", "exp-v9.9.9", raising=False)
+    assert routes._stale_client_bundle_response(Mock()) is None
+
+
+def test_url_quoted_version_stamp_is_accepted(routes, monkeypatch):
+    """The page is stamped with quote(WEBUI_VERSION, safe="") (see
+    _render_index_shell_base). A build version with "+" (setuptools-scm local
+    segment) therefore arrives as "%2B"; a fresh page must not be rejected by
+    its own encoding — that would reload once and then brick every send."""
+    from urllib.parse import quote
+    version = "v0.50.124.dev1+gabc123"
+    monkeypatch.setattr(routes, "WEBUI_VERSION", version, raising=False)
+    assert quote(version, safe="") != version  # the case under test
+    for sent in (version, quote(version, safe="")):
+        assert routes._stale_client_bundle_response(_Handler({STALE_HEADER: sent})) is None, sent
+    # and a genuinely different version is still caught, in either spelling
+    for sent in ("v0.50.123+gdef456", quote("v0.50.123+gdef456", safe="")):
+        payload = routes._stale_client_bundle_response(_Handler({STALE_HEADER: sent}))
+        assert payload is not None and payload["type"] == "stale_client_bundle", sent
 
 
 def test_chat_start_returns_409_before_touching_session(routes, monkeypatch):
@@ -158,9 +185,22 @@ def test_client_reloads_once_on_stale_bundle():
     anchor = "_isStaleClientBundleError(e)){"
     assert anchor in MESSAGES_JS, "chat-start catch must branch on the typed stale-bundle error"
     i = MESSAGES_JS.index(anchor)
-    window = MESSAGES_JS[i:i + 1800]
+    window = MESSAGES_JS[i:i + 3600]
     assert "location.reload(" in window
     # loop guard: a marker in sessionStorage so a second consecutive stale
     # response does not reload again
     assert "sessionStorage" in window
     assert "hermes-webui-stale-bundle-reload" in window
+    # Remove only this send's turn — optimisticMessages is a copy of the whole
+    # transcript, filtering it out would blank the conversation.
+    assert "S.messages.filter(m=>m!==userMsg)" in window
+    assert "optimisticMessages.includes" not in window
+    # Reuse the shared failed-send recovery (text + files + owning session +
+    # ordering after the send-time clear) instead of a hand-rolled restore.
+    assert "_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise)" in window
+    # No reload while unsaved File objects are staged, and none unless the
+    # loop-guard marker was actually stored.
+    assert "_hasStagedFiles" in window
+    assert "_markerSaved" in window
+    # The reload is chained after the draft persistence, never on a bare timer.
+    assert "setTimeout(()=>{ try{ window.location.reload()" not in window

@@ -375,6 +375,27 @@ For a foreground `python3 bootstrap.py`, stop it with Ctrl-C and start it again.
 
 ---
 
+## "This page is running an older WebUI build than the server; reload to continue"
+
+**Symptom.** Sending a message shows a short "reloading" toast and the page reloads once, keeping the typed message as the composer draft. If the message repeats after that reload, the page stays put and asks for a manual refresh instead. Before this barrier existed the same situation showed up as approval and clarify cards that never appeared (#8155).
+
+**Why.** A browser tab or a native shell (Hermex iOS, an installed PWA) can keep running frontend JavaScript loaded from a previous WebUI process indefinitely: it never re-navigates, so neither the versioned `static/*?v=` URLs nor the service worker ever refresh it. That old bundle then talks to a newer server with mismatched contracts. Every `api()` call from the page sends its build stamp (`window.__HERMES_WEBUI_BUNDLE_VERSION__`) in the `X-Hermes-WebUI-Bundle` request header; `POST /api/chat/start` compares it with the server's `WEBUI_VERSION` **before touching any session state** and refuses a mismatch with a retryable `409`:
+
+```json
+{"type": "stale_client_bundle", "retryable": true,
+ "client_version": "exp-v0.52.458", "server_version": "exp-v0.52.470", "error": "..."}
+```
+
+The comparison accepts the raw version and its URL-quoted form (the page stamp is percent-encoded, so a build version containing `+` arrives as `%2B`). A request with **no** header is always accepted: WebUI Bridge API clients, `curl`, scripts, and native shells that predate the header are never locked out by this barrier.
+
+**Client recovery.** On the typed `409` the page removes only the rejected turn from the transcript, restores the original text and attachments to the owning session's composer through the shared failed-send recovery, persists the text as that session's server-side draft (ordered after the send-time draft clear), and reloads once. A `sessionStorage` marker (`hermes-webui-stale-bundle-reload`) prevents a reload loop; the page does not auto-reload while unsaved attachments are staged or when the marker cannot be stored, and shows the manual-refresh message instead.
+
+**Fix.** Reload the page; in an installed PWA or Hermex, close and reopen the app. If the message persists after a reload, something between the client and the server is still serving the old shell: a reverse proxy or CDN caching `index.html`, or a service worker that could not update (see the PWA section above). Clear site data for the Hermes origin, or bypass the cache for `/` and `/static/*`.
+
+**When to file a bug.** File a WebUI bug if a freshly loaded page is refused (client and server versions in the toast differ only by encoding, or are identical), or if the reload drops the typed message or staged attachments.
+
+---
+
 ## Agent sessions list slowly (or the `state.db` read index is missing)
 
 **Symptom.** The sidebar's imported/CLI session list takes seconds per refresh on a large Hermes profile, or a log line says a `state.db` read failed. Sessions still appear; nothing is lost.

@@ -25068,32 +25068,30 @@ def _stale_client_bundle_response(handler) -> dict | None:
     ``?v=`` cache-bust nor the service worker ever fires, and the old bundle
     keeps talking to a newer server with mismatched contracts. The page sends
     its ``window.__HERMES_WEBUI_BUNDLE_VERSION__`` as ``X-Hermes-WebUI-Bundle``
-    on every ``api()`` call; a missing header (curl, tests, clients that predate
-    the header) is accepted so this is a barrier, not a lock-out. Checked before
-    any session state is touched, like ``_agent_runtime_barrier_response``.
+    on every ``api()`` call; a missing header (curl, tests, Bridge API clients,
+    native shells that predate the header) is always accepted, so this is a
+    barrier, not a lock-out. Checked before any session state is touched, like
+    ``_agent_runtime_barrier_response``.
     """
     try:
-        client_version = (handler.headers.get(STALE_CLIENT_BUNDLE_HEADER) or "").strip()
+        raw_header = handler.headers.get(STALE_CLIENT_BUNDLE_HEADER)
     except Exception:
+        return None
+    if not isinstance(raw_header, str):
+        return None
+    client_version = raw_header.strip()
+    if not client_version:
         return None
     server_version = str(globals().get("WEBUI_VERSION") or _current_webui_version() or "").strip()
     if not server_version:
         return None
-    if not client_version:
-        # No header. Two very different callers look like this: a non-browser
-        # client (curl, pytest, scripts) which must keep working, and a browser
-        # page running a bundle that predates the header — exactly the client
-        # #8155 was filed about, which otherwise never learns it is stale. A
-        # browser fetch() to a same-origin API always carries Origin or Referer;
-        # curl and tests do not. Use that to tell them apart.
-        try:
-            from_page = bool((handler.headers.get("Origin") or handler.headers.get("Referer") or "").strip())
-        except Exception:
-            from_page = False
-        if not from_page:
-            return None
-        client_version = "unknown (pre-header bundle)"
-    elif client_version == server_version:
+    # The page is stamped with quote(WEBUI_VERSION, safe="") (see
+    # _render_index_shell_base), so a version containing "+" (setuptools-scm
+    # local segments such as "v0.50.1.dev1+gabc123") arrives as "%2B". Accept
+    # the raw and the quoted spelling, and the decoded header, so a fresh page
+    # is never rejected by its own encoding.
+    accepted = {server_version, quote(server_version, safe="")}
+    if client_version in accepted or unquote(client_version) == server_version:
         return None
     return {
         "error": (

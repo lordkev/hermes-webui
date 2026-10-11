@@ -1875,19 +1875,45 @@ async function send(){
       delete INFLIGHT[activeSid];
       if(typeof clearInflightState==='function') clearInflightState(activeSid);
       if(typeof clearOptimisticSessionStreaming==='function') clearOptimisticSessionStreaming(activeSid);
-      if(Array.isArray(optimisticMessages)) S.messages=S.messages.filter(m=>!optimisticMessages.includes(m));
-      if(typeof renderMessages==='function') renderMessages();
+      removeThinking();
+      // Remove ONLY this send's optimistic turn (optimisticMessages is a copy of
+      // the whole transcript, so filtering it out would blank the conversation),
+      // and only while the rejected session is still the visible one.
+      if((S.session&&S.session.session_id)===activeSid){
+        S.messages=S.messages.filter(m=>m!==userMsg);
+        if(typeof renderMessages==='function') renderMessages();
+      }
       setBusy(false);
-      // Put the typed message back and persist it server-side so the reloaded
-      // page restores it (the normal draft-clear already ran at send time).
-      const _box=$('msg'); if(_box&&!_box.value){ _box.value=_submittedDraftTextForClear||displayText; if(typeof autoResize==='function') autoResize(); }
-      if(typeof _saveComposerDraftNow==='function') _saveComposerDraftNow(activeSid,_box?_box.value:'',null);
-      if(!_already){
-        try{ sessionStorage.setItem(_marker,'1'); }catch(_){ }
+      // Same recovery as every other pre-start rejection (#5472): put the
+      // ORIGINAL draft + attachments back into the owning session's composer and
+      // persist the text server-side, ordered after the send-time draft clear.
+      _restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise);
+      const _hasStagedFiles=Array.isArray(_failedSendFilesSnapshot)&&_failedSendFilesSnapshot.length>0;
+      let _markerSaved=false;
+      if(!_already&&!_hasStagedFiles){
+        try{ sessionStorage.setItem(_marker,'1'); _markerSaved=sessionStorage.getItem(_marker)==='1'; }catch(_){ _markerSaved=false; }
+      }
+      if(_markerSaved){
+        // Reload only once the restored draft is durably on the server: wait
+        // for the send-time clear, then an explicit save of the restored text,
+        // so navigation cannot cancel the write or let the clear land last.
         showToast(t('stale_bundle_reloading'),2000);
-        setTimeout(()=>{ try{ window.location.reload(); }catch(_){ } },300);
+        const _persistThenReload=()=>{
+          const _p=(typeof _saveComposerDraftNow==='function')
+            ? _saveComposerDraftNow(activeSid, _failedSendDraftText, null)
+            : Promise.resolve();
+          Promise.resolve(_p).then(()=>{ try{ window.location.reload(); }catch(_){ } },()=>{ try{ window.location.reload(); }catch(_){ } });
+        };
+        const _clear=_composerDraftClearPromise;
+        if(_clear&&typeof _clear.then==='function') _clear.then(_persistThenReload,_persistThenReload);
+        else _persistThenReload();
       }else{
+        // Already reloaded once (persistent mismatch, e.g. a proxy serving a
+        // cached index.html), unsaved File objects are staged (a reload would
+        // lose them), or the loop guard could not be stored: keep the page and
+        // ask for a manual refresh instead of looping.
         showToast(t('stale_bundle_reload_failed'),8000);
+        setComposerStatus(t('stale_bundle_reload_failed'));
       }
       return;
     }
