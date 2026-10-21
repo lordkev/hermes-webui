@@ -2116,17 +2116,23 @@ async function send(){
       // restored text (#7855), exactly as on the generic failure path.
       const _staleRestored=_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise, _goalContinuationId);
       if(_staleVisible){
-        if(_staleRestored){
-          // The original is back in the composer: remove ONLY this send's turn
-          // (optimisticMessages is a copy of the whole transcript, so filtering
-          // it out would blank the conversation).
-          S.messages=S.messages.filter(m=>m!==userMsg);
-        }else{
-          // Newer typing kept the composer, so the bubble is the only copy of the
-          // rejected message: keep it, marked as not sent, like the generic
-          // pre-start failure path below.
-          S.messages.push({role:'assistant',content:`**Error:** ${t('stale_bundle_not_sent')}`});
+        if(!_staleRestored){
+          // Newer typing kept the composer, so the rejected turn goes back on
+          // this session's queue, ahead of any follow-ups, with its files and
+          // goal continuation ID (the server refused it before consuming the
+          // pending continuation). The queue survives the reload (the restore
+          // in loadSession keeps queued entries) and sends after the next
+          // response.
+          const _staleModel=_chatPayloadModelState();
+          const _staleEntry={text:_failedSendDraftText,files:[..._failedSendFilesSnapshot],model:_staleModel.model,model_provider:_staleModel.model_provider,profile:S.activeProfile||'default'};
+          if(_goalContinuationId) _staleEntry.goal_continuation_id=_goalContinuationId;
+          queueSessionMessage(activeSid,_staleEntry,{front:true});
+          updateQueueBadge(activeSid);
         }
+        // The original is kept either way (composer or queue): remove ONLY this
+        // send's turn (optimisticMessages is a copy of the whole transcript, so
+        // filtering it out would blank the conversation).
+        S.messages=S.messages.filter(m=>m!==userMsg);
         if(typeof renderMessages==='function') renderMessages();
       }
       // A reload restores the draft text but not the File objects (the

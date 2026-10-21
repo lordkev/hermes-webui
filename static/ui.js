@@ -265,12 +265,15 @@ function _readPersistedSessionQueue(sid){
   }
   return [];
 }
-function queueSessionMessage(sid, payload){
+function queueSessionMessage(sid, payload, opts){
   if(!sid||!payload) return 0;
   const q=_getSessionQueue(sid,true);
   // Stamp created_at so the restore path can detect stale entries (agent already responded)
   const entry={...payload, _queued_at: Date.now()};
-  q.push(entry);
+  // {front:true}: a turn the server refused before starting goes back ahead of
+  // the follow-ups queued behind it (#8156).
+  if(opts&&opts.front) q.unshift(entry);
+  else q.push(entry);
   _persistSessionQueueStorage(sid,q);
   return q.length;
 }

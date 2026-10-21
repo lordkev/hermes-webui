@@ -97,7 +97,7 @@ const target = {
     return {};
   },
   uploadPendingFiles: async ({files}) => (files || []).map(f => ({ name:f.name, path:'/attachments/sid-1/' + f.name })),
-  queueSessionMessage: (sid, entry) => { QUEUE.push(entry); },
+  queueSessionMessage: (sid, entry, opts) => { if (opts && opts.front) QUEUE.unshift(entry); else QUEUE.push(entry); },
   shiftQueuedSessionMessage: () => QUEUE.shift() || null,
   _saveComposerDraftNow: (sid, text, files, contId) => {
     SAVED.push({ sid, text, files:(files||[]).map(f => f.name), ...(contId ? { contId } : {}) }); },
@@ -129,6 +129,8 @@ const report = () => {
   console.log('COMPOSER=' + JSON.stringify(target.__msg.value));
   console.log('TRAY=' + JSON.stringify((target.S.pendingFiles || []).map(f => f.name)));
   console.log('QUEUE=' + JSON.stringify(QUEUE.map(e => e.text)));
+  console.log('QUEUE_HEAD=' + JSON.stringify(QUEUE.length ? { text:QUEUE[0].text,
+    files:(QUEUE[0].files || []).map(f => f.name), contId:QUEUE[0].goal_continuation_id || '' } : null));
   console.log('STARTS=' + JSON.stringify(POSTED.length));
   console.log('SAVED=' + JSON.stringify(SAVED));
   console.log('STATUS=' + JSON.stringify(STATUS.filter(Boolean).pop() || ''));
@@ -139,10 +141,11 @@ const report = () => {
 (async () => {
   target.__msg.value = 'ORIGINAL message';
   target.S.pendingFiles = MODE === 'nofiles' ? [] : [{ name:'original.txt', size:16, type:'text/plain' }];
-  const first = MODE === 'goal' ? target.send({ goalContinuationId:'0123aaaa' }) : target.send();
+  const first = (MODE === 'goal' || MODE === 'goaltyping')
+    ? target.send({ goalContinuationId:'0123aaaa' }) : target.send();
   for (let i = 0; i < 500 && !HOLD; i++) await tick(1);
   if (!HOLD) { console.log('HOLD_FAILED'); report(); return; }
-  if (MODE === 'typing') {
+  if (MODE === 'typing' || MODE === 'goaltyping') {
     target.__msg.value = 'NEWER draft';
   } else if (MODE === 'switch') {
     // The user opens another session that is still running and has its own queue.
@@ -219,13 +222,23 @@ def _pre_fix(messages_src: str, ui_src: str) -> tuple[str, str]:
 
 def test_typing_during_the_send_keeps_the_rejected_message(tmp_path):
     """Re-gate case 1: newer typing keeps the composer, so the rejected message
-    must stay in the transcript (marked not sent) instead of vanishing."""
+    goes back on the queue, ahead of anything else, with its attachment."""
     r = _run(tmp_path, "typing")
     assert r["COMPOSER"] == "NEWER draft", r  # newer typing is never clobbered
-    assert any("ORIGINAL message" in m for m in r["TRANSCRIPT"] if m.startswith("user:")), r
-    assert r["TRANSCRIPT"][-1] == "assistant:**Error:** stale_bundle_not_sent", r
-    assert r["TRANSCRIPT"][:2] == ["user:earlier question", "assistant:earlier answer"], r
-    assert r["RELOADED"] is False
+    assert r["QUEUE_HEAD"] == {"text": "ORIGINAL message", "files": ["original.txt"], "contId": ""}, r
+    assert r["TRANSCRIPT"] == ["user:earlier question", "assistant:earlier answer"], r
+    assert r["STARTS"] == 1 and r["RELOADED"] is False, r
+
+
+def test_a_goal_continuation_blocked_by_newer_typing_is_queued_with_its_id(tmp_path):
+    """Codex thread on 53dd9a0: a continuation rejected while the user types a
+    new draft must keep its ID (the server never consumed it)."""
+    r = _run(tmp_path, "goaltyping")
+    assert r["COMPOSER"] == "NEWER draft", r
+    assert r["QUEUE_HEAD"] == {"text": "ORIGINAL message", "files": ["original.txt"], "contId": "0123aaaa"}, r
+    old = _run(tmp_path, "goaltyping", *_pre_fix(MESSAGES_SRC, UI_SRC))
+    assert old["QUEUE"] == [] and all("contId" not in x for x in old["SAVED"]), (
+        f"harness did not reproduce the dropped continuation: {old}")
 
 
 def test_typing_gate_reproduces_the_lost_message_on_the_pre_fix_shape(tmp_path):
@@ -302,4 +315,3 @@ def test_new_stale_bundle_strings_exist_in_every_locale():
     locale_blocks = i18n.count("regen_failed:")
     assert locale_blocks >= 15
     assert i18n.count("stale_bundle_refresh_files:") == locale_blocks
-    assert i18n.count("stale_bundle_not_sent:") == locale_blocks
