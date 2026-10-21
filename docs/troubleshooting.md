@@ -242,6 +242,12 @@ bootstrap probe accepts either backend.
 
 ---
 
+## Browser becomes unresponsive while switching running conversations
+
+If `/health` is healthy and `active_runs` still contains the tasks, a frozen browser does not mean the backend workers have crashed. Reconnecting to a long reasoning stream can replay many chunks at once; repainting the activity scene for every chunk can block the browser main thread.
+
+Reasoning deltas remain in each conversation's `INFLIGHT` state. Display updates share the answer's coalesced render scheduler, with synchronous tail flushes at interim-answer, tool, and terminal boundaries. Queued renders check the current conversation and stream ownership before updating the pane. Transport recovery paints pending assistant prose before cancelling the queued frame, so already received text stays visible while reconnecting. Reloading the page reconnects to existing tasks; the backend does not need to restart just because the browser froze.
+
 ## "Response interrupted." marker keeps saying "no agent output was recovered"
 
 **Symptom.** After a live response stream stops before a turn completes (manual restart, OOM, crash, browser/SSE disconnect, lost worker bookkeeping, …), the affected chat shows an `**Response interrupted.**` marker. If the run-journal for that turn is already visible on disk, the marker says the partial output was recovered; if not, it preserves the user turn and says no agent output was recovered yet.
@@ -274,6 +280,49 @@ The on-disk locations below assume the default `~/.hermes/webui` state directory
 **Caps.** The lazy retry path gives up after 12 failed attempts or 24h of wall-clock age, at which point the marker is demoted to a neutral *"Partial output may have been lost."* wording so the "reload to retry" prompt doesn't linger forever for genuinely lost journals.
 
 **When to file a bug.** If, after the fix, you see the lazy-retry wording (*"Recovering the partial output from the run journal — reload this session to retry."*) but reloading the session never promotes it to the recovered wording even though the `.jsonl` clearly contains `token` events, capture the marker JSON and the run-journal file and file a bug.
+
+---
+
+## Run journal is large / disk keeps filling (#7613)
+
+**Symptom.** `sessions/_run_journal/` grows without bound — hundreds of MB to several GB on installs with long-lived sessions or many long runs. Every run appends one `{run_id}.jsonl` and nothing removes them, so the directory only ever grows.
+
+**What runs now.** An hourly sweep (on the existing maintenance tick, never on a request path) **archives** runs past the retention caps — it does *not* delete them:
+
+```bash
+du -sh ~/.hermes/webui/sessions/_run_journal          # live run files
+du -sh ~/.hermes/webui/sessions/_run_journal_archive  # compressed archives
+```
+
+Archived runs live at `_run_journal_archive/<session_id>/<run_id>.jsonl.gz` and every read path (run status, session reload, replay after reconnect) falls back to them transparently, so recovery still works for archived runs.
+
+**Caps** (env var > `settings.json` > default; `0` disables an individual cap):
+
+| Cap | Default | Meaning |
+| --- | --- | --- |
+| `run_journal_retention_ttl_days` | `14` | Archive runs older than N days |
+| `run_journal_retention_max_runs_per_session` | `40` | Keep at most N newest runs live per session |
+| `run_journal_retention_max_bytes_per_session` | `256 MiB` | Per-session budget for live run-journal bytes |
+| `run_journal_archive_ttl_days` | `0` (never) | **Only destructive knob** — delete archives older than N days (an archive a session still needs to recover an interrupted answer is kept until the session no longer references it or is deleted) |
+
+An explicitly supplied but invalid or out-of-range value **disables** that cap
+instead of falling back to `settings.json` or the default, so a typo can never
+silently re-enable the operation you were trying to change.
+
+**Notes.**
+
+- Runs without a complete terminal row (including a journal truncated mid-write) are **never** archived — a crashed run stays in place, readable, exactly as before.
+- An archived run's compressed copy is verified byte-exact before the live file is dropped; a failure at any step leaves the live file untouched (a missed archive is always safe).
+- Deleting a session deletes its archives too.
+- Set `HERMES_WEBUI_RUN_JOURNAL_SWEEP=0` to turn the sweep off entirely.
+- On Windows (no `dir_fd` support) the sweep disables itself; retention is POSIX-only until the move can be made race-safe there.
+- To manually reclaim live journal bytes immediately, run a sweep in-process (the hourly schedule otherwise applies):
+
+  ```bash
+  python3 -c "from api.run_journal import sweep_run_journal; print(sweep_run_journal())"
+  ```
+
+  (Run from the repo root with the same Python/venv the server uses.)
 
 ---
 
@@ -439,6 +488,24 @@ python3 scripts/ensure_state_db_read_indexes.py --db ~/.hermes/state.db --confir
 **Fix.** `/sessions` is now included alongside `/` and `/index.html` in the set of paths that serve the SPA shell. No configuration change is needed.
 
 ---
+
+## Update fetch cannot create a remote-tracking ref
+
+**Symptom.** After a remote branch rename, Git reports that
+`refs/remotes/origin/onboarding` exists and it cannot create
+`refs/remotes/origin/onboarding/next` (Git older than 2.51), or only
+`some local refs could not be updated; try running 'git remote prune origin'`
+(Git 2.51 and newer, which batches fetch ref updates).
+
+**Recovery.** For the updater's `fetch origin` commands and the default clone
+mapping (`+refs/heads/*:refs/remotes/origin/*`), the runner retries this collision
+once with `--prune --no-prune-tags` and an explicit remote-tracking-only
+mapping, so config changes during recovery cannot widen the prune destinations.
+Git removes stale remote-tracking refs before fetching their replacements;
+local branches, local-only tags, and
+working-tree edits remain intact. Custom mappings (including mappings into
+local tags or branches), explicit refspecs, and other failures retain their
+normal diagnostics and require manual inspection instead of automatic pruning.
 
 ## Update check reports a Git authentication or fetch failure
 

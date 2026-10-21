@@ -929,6 +929,15 @@ def _reaper_loop() -> None:
                     if s not in _cfg.PENDING_BG_TASK_COMPLETIONS
                 ]:
                     _cfg.BG_TASK_COMPLETE_EVENTS_SEEN.pop(sid, None)
+            # Run-journal archival retention (#7613): archive runs past the age /
+            # count / size caps so an unbounded journal cannot grow forever. The
+            # sweep is hourly and gated inside `maybe_sweep_run_journal` (this
+            # tick fires far more often); it never runs on a request path, and
+            # its first pass is delayed past boot. Errors are swallowed there so
+            # a retention failure can never take the reaper down with it.
+            from api.run_journal import maybe_sweep_run_journal
+
+            maybe_sweep_run_journal()
         except Exception:
             logger.warning("SessionChannel reaper iteration failed", exc_info=True)
         # Wait but wake up promptly on stop.
@@ -1068,6 +1077,10 @@ def _build_payload(evt: dict, session_id: str) -> dict:
         "completed_at": time.time(),
         "event_id": uuid.uuid4().hex,
     }
+    # Source provenance is explicit: the browser can quiet child report-backs
+    # without muting ordinary process completion notifications.
+    if evt.get("type") == "async_delegation":
+        payload["kind"] = "async_delegation"
     # Best-effort optional summary: the first non-empty line of the synthetic
     # wakeup body, trimmed. Omitted entirely when nothing useful is available.
     try:
@@ -1506,7 +1519,7 @@ def _start_async_delegation_wakeup_turn(
             resp = start_session_turn(
                 session_id,
                 wakeup_prompt,
-                source="process_wakeup",
+                source="delegation_wakeup",
             )
             raw_status = (resp or {}).get("_status")
             if raw_status is None:
