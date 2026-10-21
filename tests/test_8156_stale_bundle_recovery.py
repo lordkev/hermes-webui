@@ -99,7 +99,8 @@ const target = {
   uploadPendingFiles: async ({files}) => (files || []).map(f => ({ name:f.name, path:'/attachments/sid-1/' + f.name })),
   queueSessionMessage: (sid, entry) => { QUEUE.push(entry); },
   shiftQueuedSessionMessage: () => QUEUE.shift() || null,
-  _saveComposerDraftNow: (sid, text, files) => { SAVED.push({ sid, text, files:(files||[]).map(f => f.name) }); },
+  _saveComposerDraftNow: (sid, text, files, contId) => {
+    SAVED.push({ sid, text, files:(files||[]).map(f => f.name), ...(contId ? { contId } : {}) }); },
   setComposerStatus: (s) => { STATUS.push(String(s || '')); },
   _chatPayloadModelState: () => ({ model:'m', model_provider:'p' }),
   _composerTextWithPendingSelections: () => target.__msg.value,
@@ -138,7 +139,7 @@ const report = () => {
 (async () => {
   target.__msg.value = 'ORIGINAL message';
   target.S.pendingFiles = MODE === 'nofiles' ? [] : [{ name:'original.txt', size:16, type:'text/plain' }];
-  const first = target.send();
+  const first = MODE === 'goal' ? target.send({ goalContinuationId:'0123aaaa' }) : target.send();
   for (let i = 0; i < 500 && !HOLD; i++) await tick(1);
   if (!HOLD) { console.log('HOLD_FAILED'); report(); return; }
   if (MODE === 'typing') {
@@ -279,6 +280,21 @@ def test_switch_gate_reproduces_the_cross_session_cleanup_on_the_pre_fix_shape(t
     r = _run(tmp_path, "switch", *_pre_fix(MESSAGES_SRC, UI_SRC))
     assert r["BUSY"] is False or r["QUEUE"] != ["B queued"], (
         f"harness did not reproduce the cross-session cleanup: {r}")
+
+
+def test_a_goal_continuation_keeps_its_id_through_the_stale_restore(tmp_path):
+    """Codex thread on a079e29: the server rejects before consuming the pending
+    continuation, so the restored draft must be persisted WITH its ID (#7855) or
+    the resend after the reload is scored as an ordinary turn."""
+    r = _run(tmp_path, "goal")
+    assert r["COMPOSER"] == "ORIGINAL message", r
+    assert r["SAVED"] and r["SAVED"][-1] == {
+        "sid": "sid-1", "text": "ORIGINAL message", "files": ["original.txt"], "contId": "0123aaaa"}, r
+
+
+def test_goal_gate_reproduces_the_dropped_id_on_the_pre_fix_shape(tmp_path):
+    r = _run(tmp_path, "goal", *_pre_fix(MESSAGES_SRC, UI_SRC))
+    assert all("contId" not in s for s in r["SAVED"]), f"harness did not reproduce the dropped ID: {r}"
 
 
 def test_new_stale_bundle_strings_exist_in_every_locale():

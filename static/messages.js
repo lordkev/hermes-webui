@@ -2111,8 +2111,10 @@ async function send(){
       // draft + attachments go back to the owning session's composer (without
       // clobbering newer typing) and the text is persisted server-side, ordered
       // after the send-time draft clear. A background session gets the captured
-      // draft persisted as its only copy.
-      const _staleRestored=_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise);
+      // draft persisted as its only copy. The server rejected the turn before
+      // consuming a pending goal continuation, so its ID travels with the
+      // restored text (#7855), exactly as on the generic failure path.
+      const _staleRestored=_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise, _goalContinuationId);
       if(_staleVisible){
         if(_staleRestored){
           // The original is back in the composer: remove ONLY this send's turn

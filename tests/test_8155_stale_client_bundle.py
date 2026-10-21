@@ -210,7 +210,7 @@ def test_client_restores_draft_and_asks_for_refresh_on_stale_bundle():
     assert "optimisticMessages.includes" not in window
     # Reuse the shared failed-send recovery (text + files + owning session +
     # ordering after the send-time clear) instead of a hand-rolled restore.
-    assert "_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise)" in window
+    assert "_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise, _goalContinuationId)" in window
     # The rejected turn's pollers and cards are torn down like any other
     # pre-start rejection.
     assert "stopClarifyPollingForSession(activeSid)" in window
