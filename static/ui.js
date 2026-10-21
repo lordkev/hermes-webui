@@ -10221,7 +10221,7 @@ async function handleComposerPrimaryAction(){
   await send();
 }
 
-function setBusy(v){
+function setBusy(v,opts){
   S.busy=v;
   updateSendBtn();
   if(!v){
@@ -10231,6 +10231,9 @@ function setBusy(v){
     const sid=_queueDrainSid||(S.session&&S.session.session_id);
     _queueDrainSid=null;
     updateQueueBadge(sid);
+    // {drain:false}: the caller knows every queued send would fail the same way
+    // (#8155 stale bundle), so the queue is left intact for a later run.
+    if(opts&&opts.drain===false) return;
     // Drain one queued message for the finished session after UI settles
     const _isViewedSid=!S.session||sid===S.session.session_id;
     const next=sid&&_isViewedSid?shiftQueuedSessionMessage(sid):null;

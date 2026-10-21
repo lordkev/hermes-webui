@@ -2096,21 +2096,36 @@ async function send(){
       if(!_clarifySessionId || _clarifySessionId===activeSid) hideClarifyCard(true, 'terminal');
       if(typeof stopClarifyPollingForSession==='function') stopClarifyPollingForSession(activeSid);
       removeThinking();
-      // Remove ONLY this send's optimistic turn (optimisticMessages is a copy of
-      // the whole transcript, so filtering it out would blank the conversation),
-      // and only while the rejected session is still the visible one.
-      if((S.session&&S.session.session_id)===activeSid){
-        S.messages=S.messages.filter(m=>m!==userMsg);
-        if(typeof renderMessages==='function') renderMessages();
-      }
-      setBusy(false);
+      // Clear busy WITHOUT draining this session's queue: every queued follow-up
+      // would hit the same 409 (the page is still the old bundle), overwrite the
+      // draft restored below and burn the queue down to its last item. The
+      // entries stay queued (and persisted) for after the reload.
+      setBusy(false,{drain:false});
       // Same recovery as every other pre-start rejection (#5472): the ORIGINAL
       // draft + attachments go back to the owning session's composer (without
       // clobbering newer typing) and the text is persisted server-side, ordered
-      // after the send-time draft clear.
-      _restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise);
-      showToast(t('stale_bundle_refresh'),8000);
-      setComposerStatus(t('stale_bundle_refresh'));
+      // after the send-time draft clear. A background session gets the captured
+      // draft persisted as its only copy.
+      const _staleRestored=_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise);
+      if((S.session&&S.session.session_id)===activeSid){
+        if(_staleRestored){
+          // The original is back in the composer: remove ONLY this send's turn
+          // (optimisticMessages is a copy of the whole transcript, so filtering
+          // it out would blank the conversation).
+          S.messages=S.messages.filter(m=>m!==userMsg);
+        }else{
+          // Newer typing kept the composer, so the bubble is the only copy of the
+          // rejected message: keep it, marked as not sent, like the generic
+          // pre-start failure path below.
+          S.messages.push({role:'assistant',content:`**Error:** ${t('stale_bundle_not_sent')}`});
+        }
+        if(typeof renderMessages==='function') renderMessages();
+      }
+      // A reload restores the draft text but not the File objects (the
+      // persisted draft holds only their metadata), so say so up front.
+      const _staleStatus=t(_failedSendFilesSnapshot&&_failedSendFilesSnapshot.length?'stale_bundle_refresh_files':'stale_bundle_refresh');
+      showToast(_staleStatus,8000);
+      setComposerStatus(_staleStatus);
       if(typeof renderSessionList==='function') void renderSessionList();
       return;
     }

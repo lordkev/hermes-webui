@@ -188,7 +188,7 @@ def test_client_restores_draft_and_asks_for_refresh_on_stale_bundle():
     anchor = "_isStaleClientBundleError(e)){"
     assert anchor in MESSAGES_JS, "chat-start catch must branch on the typed stale-bundle error"
     i = MESSAGES_JS.index(anchor)
-    window = MESSAGES_JS[i:i + 2600]
+    window = MESSAGES_JS[i:]
     window = window[:window.index("if(e&&e.status===404)")]  # this branch only
     assert "location.reload(" not in window
     assert "sessionStorage" not in window
@@ -204,8 +204,9 @@ def test_client_restores_draft_and_asks_for_refresh_on_stale_bundle():
     assert "stopClarifyPollingForSession(activeSid)" in window
     assert "hideClarifyCard(true, 'terminal')" in window
     assert "hideApprovalCard(true)" in window
-    # The user is told what to do.
-    assert "t('stale_bundle_refresh')" in window
+    # The user is told what to do (behaviour: tests/test_8156_stale_bundle_recovery.py).
+    assert "'stale_bundle_refresh'" in window
+    assert "'stale_bundle_refresh_files'" in window
     assert "sessionStorage.removeItem('hermes-webui-stale-bundle-reload')" not in MESSAGES_JS
 
 

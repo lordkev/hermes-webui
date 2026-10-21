@@ -29067,7 +29067,8 @@ def _handle_chat_start(handler, body, diag=None):
         # Reject a page running a bundle from another WebUI build before any
         # session state is touched (#8155): the old JS may lack the contracts
         # this server expects (e.g. the approval poll), so the turn would run
-        # with prompts the user can never see. Typed 409; the client reloads.
+        # with prompts the user can never see. Typed 409; the client restores the
+        # draft and asks the user to reload (it never reloads by itself).
         stale_bundle = _stale_client_bundle_response(handler)
         if stale_bundle is not None:
             return j(handler, stale_bundle, status=409)
