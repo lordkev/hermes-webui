@@ -2123,7 +2123,7 @@ async function send(){
           // pending continuation). The queue survives the reload (the restore
           // in loadSession keeps queued entries) and sends after the next
           // response.
-          const _staleModel=_chatPayloadModelState();
+          const _staleModel=modelStateForPostStart||_chatPayloadModelState();  // the model this turn was posted with
           const _staleEntry={text:_failedSendDraftText,files:[..._failedSendFilesSnapshot],model:_staleModel.model,model_provider:_staleModel.model_provider,profile:S.activeProfile||'default'};
           if(_goalContinuationId) _staleEntry.goal_continuation_id=_goalContinuationId;
           queueSessionMessage(activeSid,_staleEntry,{front:true});

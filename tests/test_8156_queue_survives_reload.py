@@ -87,6 +87,7 @@ const entries = [
   { text:'FOLLOWUP two', files:[], model:'m', _queued_at: later + 1 },
 ];
 if (SCENARIO === 'draft') target.S.session.composer_draft = { text:'ORIGINAL message', files:[] };
+if (SCENARIO === 'filedraft') target.S.session.composer_draft = { text:'', files:[{ name:'original.txt', size:16, path:'' }] };
 if (SCENARIO === 'old') entries.forEach(e => { e._queued_at = 1; });  // before the last reply
 const key = 'hermes-queue-sid-1';
 target.localStorage.setItem(key, JSON.stringify(entries));
@@ -154,9 +155,23 @@ def test_without_a_draft_the_first_goes_to_the_composer_and_the_rest_stay_queued
     assert old["composer"] == "FOLLOWUP one" and old["live"] == [], old
 
 
-def test_a_session_switch_does_not_duplicate_the_in_memory_queue(tmp_path):
+def test_an_attachment_only_draft_also_keeps_the_queue(tmp_path):
+    """Codex on 8c05f45: an attachment-only send leaves a draft with empty text
+    and file metadata; its restore clears the composer too."""
+    r = _run(tmp_path, "filedraft")
+    assert r["composer"] == "", r
+    assert [e["text"] for e in r["live"]] == ["FOLLOWUP one", "FOLLOWUP two"], r
+    assert r["persisted"] == ["FOLLOWUP one", "FOLLOWUP two"], r
+
+
+def test_a_session_switch_keeps_the_in_memory_queue_durable(tmp_path):
+    """Codex on 8c05f45: switching away and back must not leave the queue only in
+    memory, or the reload the 409 asks for loses it. No duplicates either."""
     r = _run(tmp_path, "switch")
     assert [e["text"] for e in r["live"]] == ["FOLLOWUP one", "FOLLOWUP two"], r
+    assert r["persisted"] == ["FOLLOWUP one", "FOLLOWUP two"], r
+    old = _run(tmp_path, "switch", _pre_fix_block(_restore_block(SESSIONS_SRC)))
+    assert old["persisted"] == [], f"harness did not reproduce the cleared durable copy: {old}"
 
 
 def test_entries_older_than_the_last_reply_are_still_dropped(tmp_path):

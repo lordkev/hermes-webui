@@ -3408,10 +3408,12 @@ async function loadSession(sid){
           const _lastAsst=_lastMsg?(_lastMsg.timestamp||_lastMsg._ts||0)*1000:0;
           const _fresh=_entries.filter(e=>!e._queued_at||e._queued_at>_lastAsst);
           // The saved composer draft is restored further down and replaces the
-          // composer text, so with a draft the first entry stays queued too
-          // instead of being put in the composer and then overwritten.
+          // composer text, so with a draft (text or attachment metadata) the
+          // first entry stays queued too instead of being put in the composer
+          // and then overwritten.
           const _queueDraft=S.session&&S.session.composer_draft;
-          const _queueHasDraft=!!(_queueDraft&&String(_queueDraft.text||'').trim());
+          const _queueHasDraft=!!(_queueDraft&&(String(_queueDraft.text||'').trim()
+            ||(Array.isArray(_queueDraft.files)&&_queueDraft.files.length)));
           let _keep=_fresh;
           if(_fresh.length&&!_queueHasDraft){
             const _first=_fresh[0];
@@ -3437,11 +3439,15 @@ async function loadSession(sid){
           // it sends after the next response) instead of being dropped (#8156:
           // a stale-bundle rejection asks for a reload with follow-ups queued).
           // Only when this page holds no queue for the session (a reload or tab
-          // restore); a session switch keeps its in-memory queue as it was.
+          // restore); after a session switch the in-memory queue is the truth,
+          // so rewrite the durable copy from it rather than leave it cleared.
           // Browser File objects do not survive JSON persistence, so attachments
           // are not carried over.
           const _requeue=_keep.filter(e=>String(e&&e.text||'').trim());
-          if(_requeue.length&&typeof getQueuedSessionCount==='function'&&!getQueuedSessionCount(sid)){
+          const _liveQueued=typeof getQueuedSessionCount==='function'?getQueuedSessionCount(sid):0;
+          if(_liveQueued){
+            if(typeof _persistSessionQueueStorage==='function') _persistSessionQueueStorage(sid,_getSessionQueue(sid,false));
+          }else if(_requeue.length){
             for(const _e of _requeue) queueSessionMessage(sid,{..._e,files:[]});
             if(_keep===_fresh&&typeof showToast==='function') showToast(`${_requeue.length} queued message${_requeue.length>1?'s':''} restored to the queue — sent after your next message`);
           }
