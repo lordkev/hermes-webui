@@ -131,6 +131,7 @@ const report = () => {
   console.log('STARTS=' + JSON.stringify(POSTED.length));
   console.log('SAVED=' + JSON.stringify(SAVED));
   console.log('STATUS=' + JSON.stringify(STATUS.filter(Boolean).pop() || ''));
+  console.log('BUSY=' + JSON.stringify(!!target.S.busy));
   console.log('RELOADED=' + JSON.stringify(!!target.RELOADED));
 };
 
@@ -142,6 +143,13 @@ const report = () => {
   if (!HOLD) { console.log('HOLD_FAILED'); report(); return; }
   if (MODE === 'typing') {
     target.__msg.value = 'NEWER draft';
+  } else if (MODE === 'switch') {
+    // The user opens another session that is still running and has its own queue.
+    target.S.session = { session_id:'sid-2', model:'m', model_provider:'p', workspace:null, profile:null };
+    target.S.messages = [{ role:'user', content:'B question' }];
+    target.S.busy = true;
+    QUEUE.push({ text:'B queued', files:[] });
+    target.__msg.value = '';
   } else if (MODE === 'queue') {
     for (const text of ['FOLLOWUP one', 'FOLLOWUP two']) {
       target.__msg.value = text;
@@ -188,7 +196,8 @@ def _pre_fix(messages_src: str, ui_src: str) -> tuple[str, str]:
     """The branch shape the 2026-10-19 re-gate tested: bubble removed before the
     restore, setBusy(false) drains the queue, one status for every case."""
     i = messages_src.index("if(e&&e.status===409&&_isStaleClientBundleError(e)){")
-    start = messages_src.index("      removeThinking();\n", i)
+    anchor = "stopClarifyPollingForSession(activeSid);\n"
+    start = messages_src.index(anchor, i) + len(anchor)
     end = messages_src.index("      if(typeof renderSessionList==='function') void renderSessionList();\n", start)
     old_branch = (
         "      removeThinking();\n"
@@ -253,6 +262,23 @@ def test_rejected_attachments_get_the_re_attach_instruction(tmp_path):
     assert plain["STATUS"] == "stale_bundle_refresh", plain
     assert not any("ORIGINAL message" in m for m in plain["TRANSCRIPT"]), plain
     assert plain["TRANSCRIPT"] == ["user:earlier question", "assistant:earlier answer"], plain
+
+
+def test_switching_away_leaves_the_visible_session_alone(tmp_path):
+    """Codex thread on dcc62d6c: a 409 for session A that lands while session B
+    is shown must not clear B's busy state, drain B's queue or touch B's
+    transcript; A's original is persisted as A's draft instead."""
+    r = _run(tmp_path, "switch")
+    assert r["BUSY"] is True, r
+    assert r["QUEUE"] == ["B queued"] and r["STARTS"] == 1, r
+    assert r["TRANSCRIPT"] == ["user:B question"], r
+    assert {"sid": "sid-1", "text": "ORIGINAL message", "files": ["original.txt"]} in r["SAVED"], r
+
+
+def test_switch_gate_reproduces_the_cross_session_cleanup_on_the_pre_fix_shape(tmp_path):
+    r = _run(tmp_path, "switch", *_pre_fix(MESSAGES_SRC, UI_SRC))
+    assert r["BUSY"] is False or r["QUEUE"] != ["B queued"], (
+        f"harness did not reproduce the cross-session cleanup: {r}")
 
 
 def test_new_stale_bundle_strings_exist_in_every_locale():

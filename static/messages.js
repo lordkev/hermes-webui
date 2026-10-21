@@ -2095,19 +2095,25 @@ async function send(){
       if(!_approvalSessionId || _approvalSessionId===activeSid) hideApprovalCard(true);
       if(!_clarifySessionId || _clarifySessionId===activeSid) hideClarifyCard(true, 'terminal');
       if(typeof stopClarifyPollingForSession==='function') stopClarifyPollingForSession(activeSid);
-      removeThinking();
-      // Clear busy WITHOUT draining this session's queue: every queued follow-up
-      // would hit the same 409 (the page is still the old bundle), overwrite the
-      // draft restored below and burn the queue down to its last item. The
-      // entries stay queued (and persisted) for after the reload.
-      setBusy(false,{drain:false});
+      // Visible-pane cleanup only while the rejected session is on screen: after
+      // a switch, S.busy, the thinking row and the queue drain belong to the
+      // session now shown, which may still be running.
+      const _staleVisible=(S.session&&S.session.session_id)===activeSid;
+      if(_staleVisible){
+        removeThinking();
+        // Clear busy WITHOUT draining this session's queue: every queued
+        // follow-up would hit the same 409 (the page is still the old bundle),
+        // overwrite the draft restored below and burn the queue down to its
+        // last item. The entries stay queued (and persisted) for after the reload.
+        setBusy(false,{drain:false});
+      }
       // Same recovery as every other pre-start rejection (#5472): the ORIGINAL
       // draft + attachments go back to the owning session's composer (without
       // clobbering newer typing) and the text is persisted server-side, ordered
       // after the send-time draft clear. A background session gets the captured
       // draft persisted as its only copy.
       const _staleRestored=_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise);
-      if((S.session&&S.session.session_id)===activeSid){
+      if(_staleVisible){
         if(_staleRestored){
           // The original is back in the composer: remove ONLY this send's turn
           // (optimisticMessages is a copy of the whole transcript, so filtering

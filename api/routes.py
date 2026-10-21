@@ -6756,7 +6756,9 @@ def apply_cors_preflight_headers(handler) -> None:
     handler.send_header("Access-Control-Allow-Origin", origin)
     handler.send_header("Vary", "Origin")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-    handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    # api() sends the page's build stamp on every call (#8155); an allowlisted
+    # cross-origin page is refused at preflight unless the header is listed.
+    handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Hermes-WebUI-Bundle")
 
 
 def _csrf_exempt_path(path: str) -> bool:

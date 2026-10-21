@@ -156,6 +156,18 @@ def test_chat_start_returns_409_before_touching_session(routes, monkeypatch):
     assert touched == []
 
 
+def test_cors_preflight_allows_the_bundle_header(routes):
+    """api() sends the header on every call, so an allowlisted cross-origin page
+    must see it in Access-Control-Allow-Headers or the browser refuses every
+    request at preflight."""
+    h = _Handler({"Origin": "http://127.0.0.1:8787", "Host": "127.0.0.1:8787"})
+    routes.apply_cors_preflight_headers(h)
+    allowed = {x.strip().lower() for x in h._sent_headers["Access-Control-Allow-Headers"].split(",")}
+    assert STALE_HEADER.lower() in allowed
+    assert routes.STALE_CLIENT_BUNDLE_HEADER == STALE_HEADER
+    assert {"content-type", "authorization"} <= allowed
+
+
 def test_chat_start_source_order_barrier_precedes_session_lookup():
     """Belt-and-braces on the source: the stale-client check sits before the
     session materialisation in _handle_chat_start."""
