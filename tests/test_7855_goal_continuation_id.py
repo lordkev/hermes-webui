@@ -492,7 +492,7 @@ class TestFrontendWiring:
         # non-admitted failure and compression-recovery paths.
         src = self._messages()
         assert (
-            "function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, clearPromise, goalContinuationId)"
+            "function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, clearPromise, goalContinuationId, preserveNewerFiles=false)"
             in src
         ), "the failed-send restore helper must accept the draft's continuation ID"
         assert "_setRestoredGoalContinuationDraft(_restoreContId,restore)" in src, (

@@ -27889,13 +27889,13 @@ def _stale_client_bundle_response(handler) -> dict | None:
     """Return the typed 409 payload when the calling page runs a bundle from a
     different WebUI build than this process serves; ``None`` otherwise (#8155).
 
-    A native shell (Hermex iOS) or a long-lived tab can keep running JS loaded
+    A long-lived browser tab or installed PWA can keep running JS loaded
     from a previous process forever: it never re-navigates, so neither the
     ``?v=`` cache-bust nor the service worker ever fires, and the old bundle
     keeps talking to a newer server with mismatched contracts. The page sends
     its ``window.__HERMES_WEBUI_BUNDLE_VERSION__`` as ``X-Hermes-WebUI-Bundle``
     on every ``api()`` call; a missing header (curl, tests, Bridge API clients,
-    native shells that predate the header) is always accepted, so this is a
+    native clients without the header) is always accepted, so this is a
     barrier, not a lock-out. Checked before any session state is touched, like
     ``_agent_runtime_barrier_response``.
     """

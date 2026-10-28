@@ -58,14 +58,18 @@ def _helper_body() -> str:
 
 def test_helper_has_new_signature_and_guards():
     body = _helper_body()
-    assert "function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, clearPromise, goalContinuationId)" in body
+    assert "function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, clearPromise, goalContinuationId, preserveNewerFiles=false)" in body
     # No-op when there is nothing to restore (no text AND no staged files).
     assert "if(!restore&&!files.length) return false;" in body
     # Session-aware: never mutate a different session's visible composer.
     assert "const visibleSid=(S.session&&S.session.session_id)||null;" in body
-    assert "const belongsToVisible=!(sid&&visibleSid&&sid!==visibleSid);" in body
+    assert (
+        "const belongsToVisible=preserveNewerFiles\n"
+        "    ?(S.session&&S.session.session_id)===sid\n"
+        "    :!(sid&&visibleSid&&sid!==visibleSid);"
+    ) in body
     # Never clobber a message the user began typing during the async window.
-    assert "if(inp && !String(inp.value||'').trim()){" in body
+    assert "if(inp && !String(inp.value||'').trim() && !keptNewerFiles){" in body
     # Restores text and re-stages files.
     assert "inp.value=restore;" in body
     assert "S.pendingFiles=files;" in body

@@ -1,11 +1,9 @@
 """Stale client bundle barrier (#8155).
 
-A native shell (Hermex iOS) or a long-lived tab can keep running a frontend
-bundle loaded from a previous WebUI process indefinitely: it never re-navigates,
-so neither the ``?v=`` cache-bust nor the service worker ever fires. The old
-bundle then talks to a newer server with mismatched contracts (in #8155 the old
-client relied on the removed ``/api/approval/stream`` SSE path, so approval cards
-never appeared and the agent waited out the 300 s timeout).
+A long-lived browser tab or installed PWA can keep running a frontend bundle
+loaded from a previous WebUI process. Without a navigation it can talk to a newer
+server with mismatched contracts. This is a browser/PWA compatibility safeguard,
+not a fix for native Hermex's SSE failure (addressed separately in Hermex #1206).
 
 Contract:
 
@@ -210,7 +208,7 @@ def test_client_restores_draft_and_asks_for_refresh_on_stale_bundle():
     assert "optimisticMessages.includes" not in window
     # Reuse the shared failed-send recovery (text + files + owning session +
     # ordering after the send-time clear) instead of a hand-rolled restore.
-    assert "_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise, _goalContinuationId)" in window
+    assert "_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise, _goalContinuationId, true)" in window
     # The rejected turn's pollers and cards are torn down like any other
     # pre-start rejection.
     assert "stopClarifyPollingForSession(activeSid)" in window

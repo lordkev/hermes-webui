@@ -1024,12 +1024,14 @@ async function _applyManualCompressionResult(data, focusTopic, visibleCount, com
 
 async function resumeManualCompressionForSession(sid){
   if(!sid) return;
+  let resumed=false;
   try{
     const status=await api(`/api/session/compress/status?session_id=${encodeURIComponent(sid)}`);
     if(!status||status.status!=='running') return;
     const visibleMessages=_manualCompressionVisibleMessages();
     const visibleCount=visibleMessages.length;
     const anchorMessageKey=_compressionAnchorMessageKey(visibleMessages[visibleMessages.length-1]||null);
+    resumed=true;
     if(typeof setBusy==='function') setBusy(true);
     if(typeof setComposerStatus==='function') setComposerStatus(t('compressing'));
     if(typeof setCompressionUi==='function'){
@@ -1057,7 +1059,8 @@ async function resumeManualCompressionForSession(sid){
     // render the error state or locally settle the compression UI.
     if(e&&e.status===409&&typeof _sessionProfileMismatchFromError==='function'
        &&_sessionProfileMismatchFromError(e)) return;
-    if(S.session&&S.session.session_id===sid&&typeof setCompressionUi==='function'){
+    // A failed initial probe must not create an error card's compression lock.
+    if(resumed&&S.session&&S.session.session_id===sid&&typeof setCompressionUi==='function'){
       const visibleMessages=_manualCompressionVisibleMessages();
       setCompressionUi({
         sessionId:sid,
@@ -1072,7 +1075,9 @@ async function resumeManualCompressionForSession(sid){
       renderMessages();
     }
   }finally{
-    if(S.session&&S.session.session_id===sid){
+    // An idle/failed status probe is not a completed run: settling it would
+    // drain a restored queue into the saved draft on reload (#8156).
+    if(resumed&&S.session&&S.session.session_id===sid){
       if(typeof _setCompressionSessionLock==='function') _setCompressionSessionLock(null);
       if(typeof setBusy==='function') setBusy(false);
       if(typeof setComposerStatus==='function') setComposerStatus('');

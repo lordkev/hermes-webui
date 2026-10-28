@@ -1406,7 +1406,7 @@ async function _recoverCompressedSend(error,sid,draftText,filesSnapshot,clearPro
   }catch(_){ return false; }
 }
 
-function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, clearPromise, goalContinuationId){
+function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, clearPromise, goalContinuationId, preserveNewerFiles=false){
   const restore=String(draftText||'');
   const files=Array.isArray(filesSnapshot)?filesSnapshot.filter(Boolean):[];
   if(!restore&&!files.length) return false;
@@ -1426,12 +1426,19 @@ function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, cle
   // to the session the user is currently looking at — otherwise a background
   // send failure would pollute another session's composer. (Codex #5484 catch.)
   const visibleSid=(S.session&&S.session.session_id)||null;
-  const belongsToVisible=!(sid&&visibleSid&&sid!==visibleSid);
+  // Match the stale caller's owner check: a cleared session is background,
+  // not a visible draft. Keep the permissive legacy behavior for other callers.
+  const belongsToVisible=preserveNewerFiles
+    ?(S.session&&S.session.session_id)===sid
+    :!(sid&&visibleSid&&sid!==visibleSid);
+  // Only stale-bundle rejection opts in: that caller preserves a visible
+  // rejected original in its queue when this returns false. Legacy callers do not.
+  const keptNewerFiles=preserveNewerFiles&&belongsToVisible&&Array.isArray(S.pendingFiles)&&S.pendingFiles.length>0;
   let restoredVisible=false;
   if(belongsToVisible){
     const inp=$('msg');
     // Do not clobber a new message the user began typing during the async window.
-    if(inp && !String(inp.value||'').trim()){
+    if(inp && !String(inp.value||'').trim() && !keptNewerFiles){
       inp.value=restore;
       // Mark the restored text as an identifiable continuation draft BEFORE the
       // user can act on it, so a one-key resend still carries the token.
@@ -1482,7 +1489,7 @@ function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, cle
           // still carries the token in-page as well as across a reload.
           _setRestoredGoalContinuationDraft(_restoreContId,restore);
         }
-      } else if(!restoredVisible){
+      } else if(!restoredVisible&&!keptNewerFiles){
         // Background failure (sid was never the visible session): no live
         // composer to read, so persist the captured snapshot — it's the only copy.
         // #7855 CORE (round 7): the token must travel with that snapshot.
@@ -1493,7 +1500,7 @@ function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, cle
         persistedText=restore;
         persistedFiles=files;
       } else {
-        // Restored the visible composer, then user switched away — the
+        // Restored (or kept newer files in) the visible composer, then switched — the
         // session-switch save path already saved sid's composer; skip stale write.
         return;
       }
@@ -2079,7 +2086,7 @@ async function send(){
   }catch(e){
     const errMsg=String((e&&e.message)||'');
     // #8155: this page runs a bundle from an older WebUI build than the server
-    // (a native shell or long-lived tab that never re-navigated after an
+    // (a browser tab or installed PWA that never re-navigated after an
     // upgrade). The server refused the turn with a typed 409 before touching
     // session state. Restore the draft and ask the user to refresh.
     if(e&&e.status===409&&_isStaleClientBundleError(e)){
@@ -2107,17 +2114,17 @@ async function send(){
         // last item. The entries stay queued (and persisted) for after the reload.
         setBusy(false,{drain:false});
       }
-      // Same recovery as every other pre-start rejection (#5472): the ORIGINAL
-      // draft + attachments go back to the owning session's composer (without
-      // clobbering newer typing) and the text is persisted server-side, ordered
+      // Reuse pre-start recovery (#5472), opting into newer-file protection
+      // ONLY here: this caller queues the rejected original if restoration is
+      // blocked by newer text or attachments. Draft persistence stays ordered
       // after the send-time draft clear. A background session gets the captured
       // draft persisted as its only copy. The server rejected the turn before
       // consuming a pending goal continuation, so its ID travels with the
       // restored text (#7855), exactly as on the generic failure path.
-      const _staleRestored=_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise, _goalContinuationId);
+      const _staleRestored=_restoreComposerDraftAfterFailedSend(_failedSendDraftText, _failedSendFilesSnapshot, activeSid, _composerDraftClearPromise, _goalContinuationId, true);
       if(_staleVisible){
         if(!_staleRestored){
-          // Newer typing kept the composer, so the rejected turn goes back on
+          // Newer input kept the composer, so the rejected turn goes back on
           // this session's queue, ahead of any follow-ups, with its files and
           // goal continuation ID (the server refused it before consuming the
           // pending continuation). The queue survives the reload (the restore
@@ -2135,9 +2142,12 @@ async function send(){
         S.messages=S.messages.filter(m=>m!==userMsg);
         if(typeof renderMessages==='function') renderMessages();
       }
-      // A reload restores the draft text but not the File objects (the
-      // persisted draft holds only their metadata), so say so up front.
-      const _staleStatus=t(_failedSendFilesSnapshot&&_failedSendFilesSnapshot.length?'stale_bundle_refresh_files':'stale_bundle_refresh');
+      // A reload loses File objects in the owning queue and composer too,
+      // not only those attached to the rejected POST. Ignore other sessions.
+      const _staleHasFiles=(_failedSendFilesSnapshot&&_failedSendFilesSnapshot.length)
+        || (_staleVisible&&Array.isArray(S.pendingFiles)&&S.pendingFiles.length)
+        || _getSessionQueue(activeSid,false).some(entry=>Array.isArray(entry.files)&&entry.files.length);
+      const _staleStatus=t(_staleHasFiles?'stale_bundle_refresh_files':'stale_bundle_refresh');
       showToast(_staleStatus,8000);
       setComposerStatus(_staleStatus);
       if(typeof renderSessionList==='function') void renderSessionList();
